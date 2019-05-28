@@ -467,6 +467,7 @@ bool Model::looks_like_multipart_object() const
 {
     if (this->objects.size() <= 1)
         return false;
+
     double zmin = std::numeric_limits<double>::max();
     for (const ModelObject *obj : this->objects) {
         if (obj->volumes.size() > 1 || obj->config.keys().size() > 1)
@@ -495,6 +496,58 @@ void Model::convert_multipart_object(unsigned int max_extruders)
 
     reset_auto_extruder_id();
 
+#if ENABLE_FIX_GITHUB_2395
+    bool is_single_object = (this->objects.size() == 1);
+
+    for (const ModelObject* o : this->objects)
+    {
+        for (const ModelVolume* v : o->volumes)
+        {
+            if (is_single_object)
+            {
+                // If there is only one object, just copy the volumes
+                ModelVolume* new_v = object->add_volume(*v);
+                if (new_v != nullptr)
+                {
+                    new_v->name = o->name;
+                    new_v->config.set_deserialize("extruder", get_auto_extruder_id_as_string(max_extruders));
+                    new_v->translate(-o->origin_translation);
+                }
+            }
+            else
+            {
+                // If there are more than one object, put all volumes together 
+                // Each object may contain any number of volumes and instances
+                // The volumes transformations are relative to the object containing them...
+                int counter = 1;
+                for (const ModelInstance* i : o->instances)
+                {
+                    ModelVolume* new_v = object->add_volume(*v);
+                    if (new_v != nullptr)
+                    {
+                        new_v->name = o->name + "_" + std::to_string(counter++);
+                        new_v->config.set_deserialize("extruder", get_auto_extruder_id_as_string(max_extruders));
+                        new_v->translate(-o->origin_translation);
+                        // ...so, transform everything to a common reference system (world)
+                        new_v->set_transformation(i->get_transformation() * v->get_transformation());
+                    }
+                }
+            }
+        }
+    }
+
+    if (is_single_object)
+    {
+        // If there is only one object, keep its instances
+        for (const ModelInstance* i : this->objects.front()->instances)
+        {
+            object->add_instance(*i);
+        }
+    }
+    else
+        // If there are more than one object, create a single instance
+        object->add_instance();
+#else
     for (const ModelObject* o : this->objects)
         for (const ModelVolume* v : o->volumes)
         {
@@ -509,7 +562,8 @@ void Model::convert_multipart_object(unsigned int max_extruders)
 
     for (const ModelInstance* i : this->objects.front()->instances)
         object->add_instance(*i);
-    
+#endif // ENABLE_FIX_GITHUB_2395
+
     this->clear_objects();
     this->objects.push_back(object);
 }
